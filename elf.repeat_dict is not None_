@@ -1,0 +1,517 @@
+[1mdiff --git a/maskrcnn_benchmark/config/paths_catalog.py b/maskrcnn_benchmark/config/paths_catalog.py[m
+[1mindex 0bfcbd5..77e3973 100644[m
+[1m--- a/maskrcnn_benchmark/config/paths_catalog.py[m
+[1m+++ b/maskrcnn_benchmark/config/paths_catalog.py[m
+[36m@@ -7,7 +7,7 @@[m [mimport copy[m
+ [m
+ class DatasetCatalog(object):[m
+     #DATA_DIR = "/home/users/alatif/data/ImageCorpora/"[m
+[31m-    DATA_DIR = "/home/cqs/datasets/"[m
+[32m+[m[32m    DATA_DIR = "/home1/cqs/datasets/"[m
+     DATASETS = {[m
+         "coco_2017_train": {[m
+             "img_dir": "coco/train2017",[m
+[1mdiff --git a/maskrcnn_benchmark/data/datasets/visual_genome.py b/maskrcnn_benchmark/data/datasets/visual_genome.py[m
+[1mindex fe6f8d9..921259b 100644[m
+[1m--- a/maskrcnn_benchmark/data/datasets/visual_genome.py[m
+[1m+++ b/maskrcnn_benchmark/data/datasets/visual_genome.py[m
+[36m@@ -4,6 +4,7 @@[m [mimport torch[m
+ import h5py[m
+ import json[m
+ from PIL import Image[m
+[32m+[m[32mimport matplotlib.pyplot as plt[m
+ import numpy as np[m
+ from collections import defaultdict[m
+ from tqdm import tqdm[m
+[36m@@ -18,6 +19,14 @@[m [mfrom maskrcnn_benchmark.config import cfg[m
+ [m
+ BOX_SCALE = 1024  # Scale at which we have the boxes[m
+ [m
+[32m+[m[32m# 51个关系谓词占数据集的频率，包含背景[m
+[32m+[m[32mREL_PROPORTION = [0,[m[41m [m
+[32m+[m[32m                        0.01946, 0.00077, 0.0006, 0.00145, 0.00191, 0.00459, 0.0042, 0.0375, 0.00194, 0.00154,[m[41m [m
+[32m+[m[32m                        0.00348, 0.00133, 0.00144, 0.00147, 0.00001, 0.00302, 0.00057, 0.00049, 0.00214, 0.1666,[m[41m [m
+[32m+[m[32m                        0.02449, 0.05784, 0.0107, 0.00151, 0.00262, 0.00066, 0.0003, 0.0007, 0.0572, 0.08578,[m[41m [m
+[32m+[m[32m                        0.29185, 0.00086, 0.0037, 0.00042, 0.00172, 0.00115, 0.0003, 0.00816, 0.00008, 0.01148,[m[41m [m
+[32m+[m[32m                        0.00591, 0.00094, 0.01265, 0.00111, 0.0007, 0.0034, 0.00264, 0.11287, 0.0118, 0.03195][m
+[32m+[m
+ class VGDataset(torch.utils.data.Dataset):[m
+ [m
+     def __init__(self, split, img_dir, roidb_file, dict_file, image_file, transforms=None,[m
+[36m@@ -72,7 +81,7 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+             self.img_info = [self.img_info[i] for i in np.where(self.split_mask)[0]][m
+             self.idx_list = list(range(len(self.filenames)))[m
+ [m
+[31m-        # 公式 图像级过采样[m
+[32m+[m[32m        # ========== 图像级过采样 ==========[m
+         if self.split == 'train' and cfg.MODEL.ROI_RELATION_HEAD.DATA_RESAMPLE:[m
+             self.resampling_method = 'bilvl'[m
+             self.global_rf = 0.07[m
+[36m@@ -87,12 +96,59 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+             synchronize()[m
+             self.repeat_dict = resampling_dict_generation(self, self.ind_to_predicates)[m
+ [m
+[31m-            duplicate_idx_list = [][m
+[32m+[m[32m            # 过采样后每张图片记录唯一的索引[m
+[32m+[m[32m            copy_idx_list = [idx for idx in range(len(self.filenames))][m
+[32m+[m[32m            # 记录过采样后每张图片对应的原始图片索引[m
+[32m+[m[32m            final_to_origin = [idx for idx in range(len(self.filenames))][m
+             for idx in range(len(self.filenames)):[m
+                 r_c = self.repeat_dict[idx][m
+[31m-                duplicate_idx_list.extend([idx for _ in range(r_c)])[m
+[31m-            self.idx_list = duplicate_idx_list[m
+[31m-        # 公式 图像级过采样 结束[m
+[32m+[m[32m                for _ in range(r_c - 1):[m
+[32m+[m[32m                    copy_idx_list.append(copy_idx_list[-1] + 1)[m
+[32m+[m[32m                    final_to_origin.append(idx)[m
+[32m+[m[32m            self.idx_list = copy_idx_list[m
+[32m+[m[32m            self.final_to_origin = final_to_origin[m
+[32m+[m[32m        # ========== 图像级过采样 - 结束 ==========[m
+[32m+[m
+[32m+[m[32m        # ========== 场景图级图像裁剪-1 ==========[m
+[32m+[m[32m        # 记录每张图片的裁剪区域[m
+[32m+[m[32m        crop_area_list = [][m
+[32m+[m[32m        for idx in tqdm(self.idx_list):[m
+[32m+[m[32m            relation = torch.from_numpy(self.relationships[final_to_origin[idx]])[m
+[32m+[m[32m            # 按照谓词关系频率进行丢弃[m
+[32m+[m[32m            freq_pre_img = [REL_PROPORTION[i] for i in relation[:, -1]][m
+[32m+[m[32m            drop_rate = torch.tensor(np.divide(freq_pre_img, np.sum(freq_pre_img)))[m
+[32m+[m[32m            if_drop = drop_rate > torch.rand(drop_rate.shape).type(torch.float64)[m
+[32m+[m[32m            relation_keep = relation[if_drop][m
+[32m+[m[32m            # 拿到关系对应的box[m
+[32m+[m[32m            w, h = self.get_img_info(final_to_origin[idx])['width'], self.get_img_info(final_to_origin[idx])['height'][m
+[32m+[m[32m            box = self.gt_boxes[final_to_origin[idx]] / BOX_SCALE * max(w, h)[m
+[32m+[m[32m            box = torch.from_numpy(box).reshape(-1, 4)  # guard against no boxes[m
+[32m+[m[32m            box_select = torch.zeros(box.shape[0]).type(torch.BoolTensor)[m
+[32m+[m[32m            for tgt_head_idx in relation[:, 0]:[m
+[32m+[m[32m                box_select[tgt_head_idx] = True[m
+[32m+[m[32m            for tgt_tail_idx in relation[:, 1]:[m
+[32m+[m[32m                box_select[tgt_tail_idx] = True[m
+[32m+[m[32m            # 找出所选box的最左上的点和最右下的点[m
+[32m+[m[32m            if len(box) == 0 or len(relation_keep) == 0:[m
+[32m+[m[32m                left = 0[m
+[32m+[m[32m                top = 0[m
+[32m+[m[32m                right = w[m
+[32m+[m[32m                bottom = h[m
+[32m+[m[32m            else:[m
+[32m+[m[32m                left = int(min(box[box_select, 0]).item())[m
+[32m+[m[32m                top = int(min(box[box_select, 1]).item())[m
+[32m+[m[32m                right = min(int(max(box[box_select, 2]).item()) + 1, w)[m
+[32m+[m[32m                bottom = min(int(max(box[box_select, 3]).item()) + 1, h)[m
+[32m+[m[32m            # print('----- 被筛选后的关系涉及到的主谓宾box -----')[m
+[32m+[m[32m            # print(target.bbox[box_select])[m
+[32m+[m[32m            # 在图片左上角（右下角）和box最小覆盖区域最左上角（右下角）执行随机裁剪[m
+[32m+[m[32m            x1 = random.randint(0, left)[m
+[32m+[m[32m            y1 = random.randint(0, top)[m
+[32m+[m[32m            x2 = random.randint(right, w)[m
+[32m+[m[32m            y2 = random.randint(bottom, h)[m
+[32m+[m[32m            crop_area_list.append([x1, y1, x2, y2])[m
+[32m+[m[32m        self.crop_area_list = crop_area_list[m
+[32m+[m[32m        # ========== 场景图级图像裁剪-1 - 结束 ==========[m
+ [m
+ [m
+     def __getitem__(self, index):[m
+[36m@@ -100,7 +156,7 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+         #    while(random.random() > self.img_info[index]['anti_prop']):[m
+         #        index = int(random.random() * len(self.filenames))[m
+         if self.repeat_dict is not None:[m
+[31m-                    index = self.idx_list[index][m
+[32m+[m[32m            index = self.idx_list[index][m
+         [m
+         if self.custom_eval:[m
+             img = Image.open(self.custom_files[index]).convert("RGB")[m
+[36m@@ -117,9 +173,118 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+         [m
+         target = self.get_groundtruth(index, flip_img)[m
+ [m
+[32m+[m[32m        # 场景图级图像裁剪 ----- 开始[m
+[32m+[m[32m        # 51个关系谓词占数据集的频率，包含背景[m
+[32m+[m[41m        [m
+[32m+[m[32m        dict_file = '/home1/cqs/datasets/vg/VG-SGG-dicts-with-attri.json'[m
+[32m+[m[32m        ind_to_classes, ind_to_predicates, _ = load_info(dict_file)[m
+[32m+[m[32m        num_box = len(target.bbox)[m
+[32m+[m[32m        # 获取对象标签[m
+[32m+[m[32m        obj_labels_id = target.get_field('labels')[m
+[32m+[m[32m        obj_labels = [][m
+[32m+[m[32m        for j in obj_labels_id:[m
+[32m+[m[32m            obj_labels.append(ind_to_classes[j])[m
+[32m+[m[32m        # print('\n' + '=' * 50)[m
+[32m+[m
+[32m+[m[32m        # 命令行输出关系对[m
+[32m+[m[32m        # 获取关系 [主语索引, 宾语索引, 关系标签][m
+[32m+[m[32m        tgt_rel_matrix = target.get_field("relation")[m
+[32m+[m[32m        tgt_pair_idxs = torch.nonzero(tgt_rel_matrix > 0)[m
+[32m+[m[32m        tgt_head_idxs = tgt_pair_idxs[:, 0].contiguous().view(-1)[m
+[32m+[m[32m        tgt_tail_idxs = tgt_pair_idxs[:, 1].contiguous().view(-1)[m
+[32m+[m[32m        tgt_rel_labs = tgt_rel_matrix[tgt_head_idxs, tgt_tail_idxs].contiguous().view(-1)[m
+[32m+[m[32m        relation = torch.stack([tgt_head_idxs, tgt_tail_idxs, tgt_rel_labs], 1)[m
+[32m+[m[32m        if relation.shape[0] > 0:[m
+[32m+[m[32m            tgt_head_idxs = relation[:, 0].contiguous().view(-1)[m
+[32m+[m[32m            tgt_tail_idxs = relation[:, 1].contiguous().view(-1)[m
+[32m+[m[32m            tgt_rel_labs = relation[:, 2].contiguous().view(-1)[m
+[32m+[m[32m            # print('-------- 原始关系 --------')[m
+[32m+[m[32m            # for k in range(relation.shape[0]):[m
+[32m+[m[32m            #     print("box[{}]  {} --{}--> {}  box[{}]".format(tgt_head_idxs[k],[m
+[32m+[m[32m            #                                                    obj_labels[tgt_head_idxs[k]],[m
+[32m+[m[32m            #                                                    ind_to_predicates[tgt_rel_labs[k]],[m
+[32m+[m[32m            #                                                    obj_labels[tgt_tail_idxs[k]],[m
+[32m+[m[32m            #                                                    tgt_tail_idxs[k][m
+[32m+[m[32m            #                                                    ))[m
+[32m+[m[32m            # 按照谓词关系频率进行丢弃[m
+[32m+[m[32m            freq_pre_img = [REL_PROPORTION[i] for i in tgt_rel_labs][m
+[32m+[m[32m            drop_rate = torch.tensor(np.divide(freq_pre_img, np.sum(freq_pre_img)))[m
+[32m+[m[32m            if_drop = drop_rate > torch.rand(drop_rate.shape).type(torch.float64)[m
+[32m+[m[32m            relation_keep = relation[if_drop][m
+[32m+[m[32m            # print('-------- 执行丢弃后的关系 --------')[m
+[32m+[m[32m            tgt_head_idxs = relation_keep[:, 0].contiguous().view(-1)[m
+[32m+[m[32m            tgt_tail_idxs = relation_keep[:, 1].contiguous().view(-1)[m
+[32m+[m[32m            tgt_rel_labs = relation_keep[:, 2].contiguous().view(-1)[m
+[32m+[m[32m            # for k in range(relation_keep.shape[0]):[m
+[32m+[m[32m            #     print("box[{}]  {} --{}--> {}  box[{}]".format(tgt_head_idxs[k],[m
+[32m+[m[32m            #                                                    obj_labels[tgt_head_idxs[k]],[m
+[32m+[m[32m            #                                                    ind_to_predicates[tgt_rel_labs[k]],[m
+[32m+[m[32m            #                                                    obj_labels[tgt_tail_idxs[k]],[m
+[32m+[m[32m            #                                                    tgt_tail_idxs[k][m
+[32m+[m[32m            #                                                    ))[m
+[32m+[m[32m            # 拿到关系对应的box[m
+[32m+[m[32m            box_select = torch.zeros(target.bbox.shape[0]).type(torch.BoolTensor)[m
+[32m+[m[32m            for tgt_head_idx in tgt_head_idxs:[m
+[32m+[m[32m                box_select[tgt_head_idx] = True[m
+[32m+[m[32m            for tgt_tail_idx in tgt_tail_idxs:[m
+[32m+[m[32m                box_select[tgt_tail_idx] = True[m
+[32m+[m[32m            # 找出所选box的最左上的点和最右下的点[m
+[32m+[m[32m            if len(target.bbox) == 0 or len(relation_keep) == 0:[m
+[32m+[m[32m                left = 0[m
+[32m+[m[32m                top = 0[m
+[32m+[m[32m                right = img.size[0][m
+[32m+[m[32m                bottom = img.size[1][m
+[32m+[m[32m            else:[m
+[32m+[m[32m                left = int(min(target.bbox[box_select, 0]).item())[m
+[32m+[m[32m                top = int(min(target.bbox[box_select, 1]).item())[m
+[32m+[m[32m                right = min(int(max(target.bbox[box_select, 2]).item()) + 1, img.size[0])[m
+[32m+[m[32m                bottom = min(int(max(target.bbox[box_select, 3]).item()) + 1, img.size[1])[m
+[32m+[m[32m            # print('----- 被筛选后的关系涉及到的主谓宾box -----')[m
+[32m+[m[32m            # print(target.bbox[box_select])[m
+[32m+[m[32m            # 在图片左上角（右下角）和box最小覆盖区域最左上角（右下角）执行随机裁剪[m
+[32m+[m[32m            x1 = random.randint(0, left)[m
+[32m+[m[32m            y1 = random.randint(0, top)[m
+[32m+[m[32m            x2 = random.randint(right, img.size[0])[m
+[32m+[m[32m            y2 = random.randint(bottom, img.size[1])[m
+[32m+[m[32m            # print('----- 执行裁剪的区域 -----')[m
+[32m+[m[32m            # print(f"{x1}, {y1}, {x2}, {y2}")[m
+[32m+[m[32m            # 没有完全被裁剪区域包括的box一律去除[m
+[32m+[m[32m            idx = 0[m
+[32m+[m[32m            for box in target.bbox:[m
+[32m+[m[32m                if box[0] > x1 and box[1] > y1 and box[2] < x2 and box[3] < y2:[m
+[32m+[m[32m                    box_select[idx] = True[m
+[32m+[m[32m                idx += 1[m
+[32m+[m[32m            # 如果去除关系及其对应的主宾语真实框后不存在真实框，直接返回原来的图片和注解，否则会报错[m
+[32m+[m[32m            if True in box_select:[m
+[32m+[m[32m                # 执行裁剪[m
+[32m+[m[32m                img = img.crop((x1, y1, x2, y2))[m
+[32m+[m[32m                # print('----- 最终被保留的box -----')[m
+[32m+[m[32m                # for box_idx in range(num_box):[m
+[32m+[m[32m                #     if box_select[box_idx] == True:[m
+[32m+[m[32m                #         print(f"box[{box_idx}]: {obj_labels[box_idx]} {target.bbox[box_idx]}")[m
+[32m+[m
+[32m+[m[32m                # == 注释上的操作 ==[m
+[32m+[m[32m                # box 坐标需要随裁剪图片大小进行等比例调整[m
+[32m+[m[32m                coordinate_change = torch.tensor([x1, y1, x1, y1])[m
+[32m+[m[32m                target.bbox = target.bbox[box_select] - coordinate_change[m
+[32m+[m[32m                # 去除没有被选中的 box 标签[m
+[32m+[m[32m                target.add_field("labels", target.get_field("labels")[box_select])[m
+[32m+[m[32m                # target.relation 矩阵去除没有被选中的关系[m
+[32m+[m[32m                relation_drop = relation[~if_drop][m
+[32m+[m[32m                target.get_field("relation")[relation_drop[:, 0], relation_drop[:, 1]] = 0[m
+[32m+[m[32m                # 修改 target 注释中图片的大小[m
+[32m+[m[32m                target.size = (x2 - x1, y2 - y1)[m
+[32m+[m[32m                # 执行丢弃box后，关系对应的box序号得改变[m
+[32m+[m[32m                target.add_field("relation", target.get_field("relation")[box_select][:, box_select])[m
+[32m+[m[32m                # 从原数据集中获取的信息也得改[m
+[32m+[m[32m                self.gt_boxes[index][m
+[32m+[m[32m        # 场景图级图像裁剪 ----- 结束[m
+[32m+[m
+         if flip_img:[m
+             img = img.transpose(method=Image.FLIP_LEFT_RIGHT)[m
+ [m
+[32m+[m[32m        # 执行图像增强，包括：[m
+[32m+[m[32m        # 1. 亮度变换 2. resize 3. 垂直翻转 4. 水平翻转 5. 转换为tensor 6. 归一化[m
+         if self.transforms is not None:[m
+             img, target = self.transforms(img, target)[m
+ [m
+[36m@@ -164,13 +329,14 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+         # it will take a while, you only need to do it once[m
+ [m
+         # correct_img_info(self.img_dir, self.image_file)[m
+[31m-        return self.img_info[index][m
+[32m+[m[32m        return self.img_info[self.final_to_origin[index]][m
+ [m
+     def get_groundtruth(self, index, evaluation=False, flip_img=False):[m
+[31m-        img_info = self.get_img_info(index)[m
+[32m+[m[32m        img_info = self.get_img_info(self.final_to_origin[index])[m
+         w, h = img_info['width'], img_info['height'][m
+         # important: recover original box from BOX_SCALE[m
+[31m-        box = self.gt_boxes[index] / BOX_SCALE * max(w, h)[m
+[32m+[m[32m        # VG-SGG-with-attri.h5 文件保存的是图片 resize 到 1024 时候的 box，因此需要将文件中的box数据恢复为原始数据[m
+[32m+[m[32m        box = self.gt_boxes[self.final_to_origin[index]] / BOX_SCALE * max(w, h)[m
+         box = torch.from_numpy(box).reshape(-1, 4)  # guard against no boxes[m
+         if flip_img:[m
+             new_xmin = w - box[:,2][m
+[36m@@ -193,11 +359,11 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+             relation = [(k[0], k[1], np.random.choice(v)) for k,v in all_rel_sets.items()][m
+             relation = np.array(relation, dtype=np.int32)[m
+         [m
+[31m-        # 公式 应用重采样[m
+[32m+[m[32m        # ========== 实例级欠采样 ==========[m
+         if self.repeat_dict is not None:[m
+             # 过滤掉头部关系后的关系, 原始/过滤前的关系[m
+             relation, _ = apply_resampling(index, relation, self.repeat_dict, self.drop_rate, )[m
+[31m-        # 公式 应用重采样结束[m
+[32m+[m[32m        # ========== 实例级欠采样 - 结束 ==========[m
+ [m
+         # add relation to target[m
+         num_box = len(target)[m
+[1mdiff --git a/maskrcnn_benchmark/utils/imports.py b/maskrcnn_benchmark/utils/imports.py[m
+[1mindex 53e27e2..4d2148f 100644[m
+[1m--- a/maskrcnn_benchmark/utils/imports.py[m
+[1m+++ b/maskrcnn_benchmark/utils/imports.py[m
+[36m@@ -1,7 +1,7 @@[m
+ # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.[m
+ import torch[m
+ [m
+[31m-if torch._six.PY3:[m
+[32m+[m[32mif torch._six.PY37:[m
+     import importlib[m
+     import importlib.util[m
+     import sys[m
+[1mdiff --git a/scripts/train_motif.sh b/scripts/train_motif.sh[m
+[1mindex 453d1fe..571f9b1 100644[m
+[1m--- a/scripts/train_motif.sh[m
+[1m+++ b/scripts/train_motif.sh[m
+[36m@@ -14,10 +14,10 @@[m [mSOLVER.CHECKPOINT_PERIOD 2000 \[m
+ SOLVER.PRE_VAL False \[m
+ \[m
+ MODEL.ROI_RELATION_HEAD.DATA_RESAMPLE True \[m
+[31m-MODEL.ROI_RELATION_HEAD.RESAMPLE_METHOD bi-level-resample \[m
+[32m+[m[32mMODEL.ROI_RELATION_HEAD.RESAMPLE_METHOD heterophily-resample \[m
+ \[m
+[31m-GLOVE_DIR /root/autodl-tmp/glove \[m
+[31m-MODEL.PRETRAINED_DETECTOR_CKPT /root/autodl-tmp/pretrained_faster_rcnn/model_final.pth \[m
+[31m-OUTPUT_DIR /root/autodl-tmp/checkpoints/motif-precls-biresample[m
+[32m+[m[32mGLOVE_DIR /home1/cqs/glove \[m
+[32m+[m[32mMODEL.PRETRAINED_DETECTOR_CKPT /home1/cqs/checkpoints/pretrained_faster_rcnn/model_final.pth \[m
+[32m+[m[32mOUTPUT_DIR /home1/cqs/checkpoints/motif-precls[m
+ [m
+ # shutdown[m
+\ No newline at end of file[m
+[1mdiff --git a/tools/relation_train_net.py b/tools/relation_train_net.py[m
+[1mindex bc1dc26..eea8580 100644[m
+[1m--- a/tools/relation_train_net.py[m
+[1m+++ b/tools/relation_train_net.py[m
+[36m@@ -51,7 +51,7 @@[m [mnp.random.seed(SEED)[m
+ # torch.backends.cudnn.benchmark = False  # 默认为False[m
+ torch.backends.cudnn.deterministic = True  # 默认为False;benchmark为True时,y要排除随机性必须为True[m
+ [m
+[31m-# torch.autograd.set_detect_anomaly(True)[m
+[32m+[m[32mtorch.autograd.set_detect_anomaly(True)[m
+ [m
+ def train(cfg, local_rank, distributed, logger):[m
+     debug_print(logger, 'prepare training')[m
+[1mdiff --git a/z-joson/visualize_relationship.py b/z-joson/visualize_relationship.py[m
+[1mindex 76ebb78..81c5851 100644[m
+[1m--- a/z-joson/visualize_relationship.py[m
+[1m+++ b/z-joson/visualize_relationship.py[m
+[36m@@ -18,6 +18,14 @@[m [mfrom maskrcnn_benchmark.structures.boxlist_ops import boxlist_iou[m
+ [m
+ BOX_SCALE = 1024  # Scale at which we have the boxes[m
+ [m
+[32m+[m[32m# 51个关系谓词占数据集的频率，包含背景[m[41m[m
+[32m+[m[32mREL_PROPORTION = [0,[m[41m [m
+[32m+[m[32m                    0.01946, 0.00077, 0.0006, 0.00145, 0.00191, 0.00459, 0.0042, 0.0375, 0.00194, 0.00154,[m[41m [m
+[32m+[m[32m                    0.00348, 0.00133, 0.00144, 0.00147, 0.00001, 0.00302, 0.00057, 0.00049, 0.00214, 0.1666,[m[41m [m
+[32m+[m[32m                    0.02449, 0.05784, 0.0107, 0.00151, 0.00262, 0.00066, 0.0003, 0.0007, 0.0572, 0.08578,[m[41m [m
+[32m+[m[32m                    0.29185, 0.00086, 0.0037, 0.00042, 0.00172, 0.00115, 0.0003, 0.00816, 0.00008, 0.01148,[m[41m [m
+[32m+[m[32m                    0.00591, 0.00094, 0.01265, 0.00111, 0.0007, 0.0034, 0.00264, 0.11287, 0.0118, 0.03195][m[41m[m
+[32m+[m[41m[m
+ [m
+ class VGDataset(torch.utils.data.Dataset):[m
+ [m
+[36m@@ -312,7 +320,7 @@[m [mclass VGDataset(torch.utils.data.Dataset):[m
+ # 可视化场景图[m
+ def visualize_vg():[m
+     dataset_name = 'VG_stanford_filtered_with_attribute_train'[m
+[31m-    dict_file = '/home/cqs/datasets/vg/VG-SGG-dicts-with-attri.json'[m
+[32m+[m[32m    dict_file = '/home1/cqs/datasets/vg/VG-SGG-dicts-with-attri.json'[m[41m[m
+     dataset_catalog = paths_catalog.DatasetCatalog[m
+     data = dataset_catalog.get(dataset_name, cfg)[m
+     args = data["args"][m
+[36m@@ -566,7 +574,168 @@[m [mdef get_redundancy():[m
+     print(min_heterophily_3)[m
+     print(min_heterophily_4)[m
+ [m
+[32m+[m[41m[m
+[32m+[m[32m# 裁剪场景图[m[41m[m
+[32m+[m[32mdef clip_vg():[m[41m[m
+[32m+[m[32m    # 基础变量[m[41m[m
+[32m+[m[32m    dataset_name = 'VG_stanford_filtered_with_attribute_train'[m[41m[m
+[32m+[m[32m    dict_file = '/home1/cqs/datasets/vg/VG-SGG-dicts-with-attri.json'[m[41m[m
+[32m+[m[32m    dataset_catalog = paths_catalog.DatasetCatalog[m[41m[m
+[32m+[m[32m    data = dataset_catalog.get(dataset_name, cfg)[m[41m[m
+[32m+[m[32m    args = data["args"][m[41m[m
+[32m+[m[32m    # 去除掉一个key[m[41m[m
+[32m+[m[32m    if "capgraphs_file" in args.keys():[m[41m[m
+[32m+[m[32m            del args["capgraphs_file"][m[41m[m
+[32m+[m[32m    dataset = VGDataset(**args)[m[41m[m
+[32m+[m[32m    ind_to_classes, ind_to_predicates, _ = dataset.load_info(dict_file)[m[41m[m
+[32m+[m[41m[m
+[32m+[m[32m    # 对于数据集中的每一张图片[m[41m[m
+[32m+[m[32m    for i in range(len(dataset)):[m[41m[m
+[32m+[m[32m        anno = dataset.get_groundtruth(i)[m[41m[m
+[32m+[m[32m        img_path = dataset.filenames[i][m[41m[m
+[32m+[m[32m        img = cv2.imread(img_path)[m[41m[m
+[32m+[m[32m        num_box = len(anno.bbox)[m[41m[m
+[32m+[m[32m        # 获取对象标签[m[41m[m
+[32m+[m[32m        obj_labels_id = anno.get_field('labels')[m[41m[m
+[32m+[m[32m        obj_labels = [][m[41m[m
+[32m+[m[32m        for j in obj_labels_id:[m[41m[m
+[32m+[m[32m            obj_labels.append(ind_to_classes[j])[m[41m[m
+[32m+[m[32m        # 对象边框标签可视化[m[41m[m
+[32m+[m[32m        box_color = (255, 0, 255)[m[41m[m
+[32m+[m[32m        print('\n' + '=' * 50)[m[41m[m
+[32m+[m[41m[m
+[32m+[m[32m        # 对于图片中每一个box[m[41m[m
+[32m+[m[32m        for j in range(num_box):[m[41m[m
+[32m+[m[32m            box = anno.bbox[j][m[41m[m
+[32m+[m[32m            x1, y1, x2, y2 = box[:4][m[41m[m
+[32m+[m[32m            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)[m[41m[m
+[32m+[m[32m            # 为每个边框添加对象标签[m[41m[m
+[32m+[m[32m            obj_label = str(j) + ' ' + obj_labels[j][m[41m[m
+[32m+[m[32m            label_size = cv2.getTextSize(obj_label + '0', cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0][m[41m[m
+[32m+[m[32m            if y1 - label_size[1] - 3 < 0:[m[41m[m
+[32m+[m[32m                cv2.putText(img, obj_label, (x1, y1 + label_size[1] + 3), cv2.FONT_HERSHEY_SIMPLEX,[m[41m[m
+[32m+[m[32m                            0.5, (41, 226, 243), thickness=2)[m[41m[m
+[32m+[m[32m            else:[m[41m[m
+[32m+[m[32m                cv2.putText(img, obj_label, (x1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX,[m[41m[m
+[32m+[m[32m                            0.5, (41, 226, 243), thickness=2)[m[41m[m
+[32m+[m[32m            # 显示对象边框[m[41m[m
+[32m+[m[32m            cv2.rectangle(img, (x1, y1), (x2, y2), color=box_color, thickness=2)[m[41m[m
+[32m+[m[32m            # 命令行输出边框信息[m[41m[m
+[32m+[m[32m            print("box[{}]: {}".format(j, obj_labels[j]))[m[41m[m
+[32m+[m[32m        # 显示[m[41m[m
+[32m+[m[32m        cv2.imshow("draw_0", img)[m[41m[m
+[32m+[m[32m        cv2.waitKey(0)[m[41m[m
+[32m+[m[41m[m
+[32m+[m[32m        # 命令行输出关系对[m[41m[m
+[32m+[m[32m        relation = anno.get_field('relation_tuple')[m[41m[m
+[32m+[m[32m        if relation.shape[0] > 0:[m[41m[m
+[32m+[m[32m            tgt_head_idxs = relation[:, 0].contiguous().view(-1)[m[41m[m
+[32m+[m[32m            tgt_tail_idxs = relation[:, 1].contiguous().view(-1)[m[41m[m
+[32m+[m[32m            tgt_rel_labs = relation[:, 2].contiguous().view(-1)[m[41m[m
+[32m+[m[32m            print('-------- 原始关系 --------')[m[41m[m
+[32m+[m[32m            for k in range(relation.shape[0]):[m[41m[m
+[32m+[m[32m                print("box[{}]  {} --{}--> {}  box[{}]".format(tgt_head_idxs[k],[m[41m[m
+[32m+[m[32m                                                               obj_labels[tgt_head_idxs[k]],[m[41m[m
+[32m+[m[32m                                                               ind_to_predicates[tgt_rel_labs[k]],[m[41m[m
+[32m+[m[32m                                                               obj_labels[tgt_tail_idxs[k]],[m[41m[m
+[32m+[m[32m                                                               tgt_tail_idxs[k][m[41m[m
+[32m+[m[32m                                                               ))[m[41m[m
+[32m+[m[32m            # 按照谓词关系频率进行丢弃[m[41m[m
+[32m+[m[32m            freq_pre_img = [REL_PROPORTION[i] for i in tgt_rel_labs][m[41m[m
+[32m+[m[32m            drop_rate = torch.tensor(np.divide(freq_pre_img, np.sum(freq_pre_img)))[m[41m[m
+[32m+[m[32m            if_drop = drop_rate > torch.rand(drop_rate.shape)[m[41m[m
+[32m+[m[32m            relation = relation[if_drop][m[41m[m
+[32m+[m[32m            print('-------- 执行丢弃后的关系 --------')[m[41m[m
+[32m+[m[32m            tgt_head_idxs = relation[:, 0].contiguous().view(-1)[m[41m[m
+[32m+[m[32m            tgt_tail_idxs = relation[:, 1].contiguous().view(-1)[m[41m[m
+[32m+[m[32m            tgt_rel_labs = relation[:, 2].contiguous().view(-1)[m[41m[m
+[32m+[m[32m            for k in range(relation.shape[0]):[m[41m[m
+[32m+[m[32m                print("box[{}]  {} --{}--> {}  box[{}]".format(tgt_head_idxs[k],[m[41m[m
+[32m+[m[32m                                                               obj_labels[tgt_head_idxs[k]],[m[41m[m
+[32m+[m[32m                                                               ind_to_predicates[tgt_rel_labs[k]],[m[41m[m
+[32m+[m[32m                                                               obj_labels[tgt_tail_idxs[k]],[m[41m[m
+[32m+[m[32m                                                               tgt_tail_idxs[k][m[41m[m
+[32m+[m[32m                                                               ))[m[41m[m
+[32m+[m[32m            # 拿到关系对应的box[m[41m[m
+[32m+[m[32m            box_select = torch.zeros(anno.bbox.shape[0]).type(torch.BoolTensor)[m[41m[m
+[32m+[m[32m            for tgt_head_idx in tgt_head_idxs:[m[41m[m
+[32m+[m[32m                box_select[tgt_head_idx] = True[m[41m[m
+[32m+[m[32m            for tgt_tail_idx in tgt_tail_idxs:[m[41m[m
+[32m+[m[32m                box_select[tgt_tail_idx] = True[m[41m[m
+[32m+[m[32m            # 重置图片[m[41m[m
+[32m+[m[32m            img = cv2.imread(img_path)[m[41m[m
+[32m+[m[32m            # 找出所有box的最左上的点和最右下的点[m[41m[m
+[32m+[m[32m            if len(anno.bbox) == 0 or len(relation) == 0:[m[41m[m
+[32m+[m[32m                left = 0[m[41m[m
+[32m+[m[32m                top = 0[m[41m[m
+[32m+[m[32m                right = img.shape[1][m[41m[m
+[32m+[m[32m                bottom = img.shape[0][m[41m[m
+[32m+[m[32m            else:[m[41m[m
+[32m+[m[32m                left = int(min(anno.bbox[box_select, 0]).item())[m[41m[m
+[32m+[m[32m                top = int(min(anno.bbox[box_select, 1]).item())[m[41m[m
+[32m+[m[32m                right = int(max(anno.bbox[box_select, 2]).item())[m[41m[m
+[32m+[m[32m                bottom = int(max(anno.bbox[box_select, 3]).item())[m[41m[m
+[32m+[m[32m            print('----- 被筛选后的关系涉及到的主谓宾box -----')[m[41m[m
+[32m+[m[32m            print(anno.bbox[box_select])[m[41m[m
+[32m+[m[32m            # 在图片左上角（右下角）和box最小覆盖区域最左上角（右下角）执行随机裁剪[m[41m[m
+[32m+[m[32m            x1 = random.randint(0, left)[m[41m[m
+[32m+[m[32m            y1 = random.randint(0, top)[m[41m[m
+[32m+[m[32m            x2 = random.randint(right, img.shape[1])[m[41m[m
+[32m+[m[32m            y2 = random.randint(bottom, img.shape[0])[m[41m[m
+[32m+[m[32m            print('----- 执行裁剪的区域 -----')[m[41m[m
+[32m+[m[32m            print(f"{x1}, {y1}, {x2}, {y2}")[m[41m[m
+[32m+[m[32m            # 执行裁剪[m[41m[m
+[32m+[m[32m            crop = img[x1:x2, y1:y2][m[41m[m
+[32m+[m[32m            # 没有完全被裁剪区域包括的box一律去除[m[41m[m
+[32m+[m[32m            idx = 0[m[41m[m
+[32m+[m[32m            for box in anno.bbox:[m[41m[m
+[32m+[m[32m                if box[0] > x1 and box[1] > y1 and box[2] < x2 and box[3] < y2:[m[41m[m
+[32m+[m[32m                    box_select[idx] = True[m[41m[m
+[32m+[m[32m                idx += 1[m[41m[m
+[32m+[m[32m            print('----- 最终被保留的box -----')[m[41m[m
+[32m+[m[32m            for box_idx in range(num_box):[m[41m[m
+[32m+[m[32m                if box_select[box_idx] == True:[m[41m[m
+[32m+[m[32m                    print(f"box[{box_idx}]: {obj_labels[box_idx]} {anno.bbox[box_idx]}")[m[41m[m
+[32m+[m[32m            # box 坐标需要随裁剪图片大小进行等比例调整[m[41m[m
+[32m+[m[32m            final_boxes = anno.bbox[box_select][m[41m[m
+[32m+[m[32m            coordinate_change = torch.tensor([x1, y1, x1, y1])[m[41m[m
+[32m+[m[32m            final_boxes = final_boxes - coordinate_change[m[41m[m
+[32m+[m[32m            print('----- 随裁剪进行坐标变换后的box -----')[m[41m[m
+[32m+[m[32m            print(final_boxes)[m[41m[m
+[32m+[m[32m            # 可视化调整后的box[m[41m[m
+[32m+[m[32m            # 对于图片中每一个box[m[41m[m
+[32m+[m[32m            print('----- 调整后的box信息 -----')[m[41m[m
+[32m+[m[32m            for box_idx in range(len(anno.bbox)):[m[41m[m
+[32m+[m[32m                if box_select[box_idx] == True:[m[41m[m
+[32m+[m[32m                    box = anno.bbox[box_idx][m[41m[m
+[32m+[m[32m                    x1, y1, x2, y2 = box[:4][m[41m[m
+[32m+[m[32m                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)[m[41m[m
+[32m+[m[32m                    # 为每个边框添加对象标签[m[41m[m
+[32m+[m[32m                    obj_label = str(box_idx) + ' ' + obj_labels[box_idx][m[41m[m
+[32m+[m[32m                    label_size = cv2.getTextSize(obj_label + '0', cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0][m[41m[m
+[32m+[m[32m                    if y1 - label_size[1] - 3 < 0:[m[41m[m
+[32m+[m[32m                        cv2.putText(img, obj_label, (x1, y1 + label_size[1] + 3), cv2.FONT_HERSHEY_SIMPLEX,[m[41m[m
+[32m+[m[32m                                    0.5, (41, 226, 243), thickness=2)[m[41m[m
+[32m+[m[32m                    else:[m[41m[m
+[32m+[m[32m                        cv2.putText(img, obj_label, (x1, y1 - 3), cv2.FONT_HERSHEY_SIMPLEX,[m[41m[m
+[32m+[m[32m                                    0.5, (41, 226, 243), thickness=2)[m[41m[m
+[32m+[m[32m                    # 显示对象边框[m[41m[m
+[32m+[m[32m                    cv2.rectangle(img, (x1, y1), (x2, y2), color=box_color, thickness=2)[m[41m[m
+[32m+[m[32m                    # 命令行输出边框信息[m[41m[m
+[32m+[m[32m                    print("box[{}]: {}".format(box_idx, obj_labels[box_idx]))[m[41m[m
+[32m+[m[32m            # 显示图片[m[41m[m
+[32m+[m[32m            cv2.imshow("draw_1", crop)[m[41m[m
+[32m+[m[32m            cv2.waitKey(0)[m[41m[m
+[32m+[m[41m[m
+[32m+[m[32m        # 如果没有关系[m[41m[m
+[32m+[m[32m        else:[m[41m[m
+[32m+[m[32m            print('-' * 25 + '\nno relation')[m[41m[m
+[32m+[m[41m[m
+[32m+[m[41m[m
+[32m+[m[41m[m
+[32m+[m[41m[m
+ if __name__ == "__main__":[m
+     # get_dataset_distribution()[m
+[32m+[m[32m    clip_vg()[m[41m[m
+     # visualize_vg()[m
+[31m-    get_redundancy()[m
+[32m+[m[32m    # get_redundancy()[m[41m[m
